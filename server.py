@@ -281,18 +281,31 @@ class FirefoxKontrolServer:
             # _receive_identifyが既に適切な理由でソケットを閉じている。
             return
 
-        # このブラウザの既存接続が登録されている場合、古い接続を閉じて
-        # 新しい接続に置き換える（例: ブラウザが拡張機能を再起動した場合）。
+        # H-3: identify重複時の後着拒否
+        #
+        # 既存接続が生きている（not old_client.closed）場合は後着を拒否する。
+        # 悪意あるローカルプロセスが同じbrowser_nameでidentifyを送って正規接続を
+        # 奪うことを防ぐためのセキュリティ強化。
+        #
+        # ただし「拡張機能の再読み込み」のような正規ケースを壊さないよう、
+        # 既存接続が既に閉じている（stale）場合は置換を許可する。
+        # websockets 10.xの .closed は State.CLOSED のときのみ True を返す。
+        # closing ハンドシェイク中は False のままだが、その場合も生きているとみなす。
         old_client = self._clients.get(browser_name)
         if old_client is not None:
+            if not old_client.closed:
+                # 既存接続が生きている → 後着を拒否する。
+                logger.warning(
+                    'Rejecting duplicate %s connection; existing connection is still alive.',
+                    _sanitise_for_log(browser_name),
+                )
+                await websocket.close(code=1008, reason='Duplicate connection rejected')
+                return
+            # 既存接続が閉じている（stale）→ 正当な再接続として置換を許可する。
             logger.info(
-                'Replacing existing %s connection with new one.',
+                'Replacing stale %s connection.',
                 _sanitise_for_log(browser_name),
             )
-            try:
-                await old_client.close(code=1001, reason='Replaced by new connection')
-            except Exception:
-                pass  # ベストエフォートでの切断。新しい接続が無条件で引き継ぐ。
 
         self._clients[browser_name] = websocket
         logger.info('Extension connected: browser=%s', _sanitise_for_log(browser_name))
@@ -864,10 +877,21 @@ async def run_serve_mode(ws_port: int, http_port: int) -> None:
     # CSRF対策トークンを生成する。
     # 環境変数 FIREFOX_KONTROL_TOKEN が設定されている場合はそれを使用し、
     # 常駐起動時のトークン固定を可能にする（~/.bashrc等への記載を想定）。
-    # 未設定の場合は secrets.token_urlsafe(32) で暗号論的に安全なトークンを生成する。
+    # 未設定（または空白のみ）の場合は secrets.token_urlsafe(32) で暗号論的に安全なトークンを生成する。
     # セキュリティ注記: トークン値はstderrにのみ出力する（ローカルプロセスログ、外部に出ない）。
-    env_token = os.environ.get('FIREFOX_KONTROL_TOKEN', '')
-    auth_token: str = env_token if env_token else secrets.token_urlsafe(32)
+    #
+    # M-7: 強度検証
+    #   - .strip() で先頭/末尾の空白を除去してから空判定する（" " だけのトークンを弾く）。
+    #   - 32文字未満の場合は警告を出すが拒否はしない（ユーザー指定値を採用する）。
+    env_var_name: str = 'FIREFOX_KONTROL_TOKEN'
+    env_token: str = os.environ.get(env_var_name, '').strip()
+    env_token_used: bool = bool(env_token)
+    if env_token_used and len(env_token) < 32:
+        logger.warning(
+            '環境変数 %s のトークンが短すぎます（32文字未満）。ブルートフォース攻撃に弱くなります。',
+            env_var_name,
+        )
+    auth_token: str = env_token if env_token_used else secrets.token_urlsafe(32)
 
     ws_server = await websockets.server.serve(
         kontrol.handle_connection,
@@ -888,19 +912,38 @@ async def run_serve_mode(ws_port: int, http_port: int) -> None:
         port=http_port,
     )
     logger.info('FirefoxKontrol HTTP API listening on %s:%d', BIND_HOST, http_port)
-    logger.info('Auth token: %s', auth_token)
-    logger.info(
-        'Ready. Send commands with: '
-        'TOKEN=%s; curl -s %s:%d '
-        '-H "%s: $TOKEN" '
-        '-H "Content-Type: application/json" '
-        '-d \'{"cmd":"get_dom"}\' '
-        '(target: "browser":"firefox")',
-        auth_token,
-        BIND_HOST,
-        http_port,
-        HTTP_AUTH_HEADER_NAME,
-    )
+    # M-8: トークン起動ログの集約
+    #   - 環境変数設定時: トークン値をログに出さず、プレースホルダ形式で案内する。
+    #     (journald/tmux scrollback への生トークン漏洩を防止する)
+    #   - ランダム生成時: 利便性のため生トークンを1度だけ含むコピペ可能な形式で表示する。
+    if env_token_used:
+        logger.info(
+            'Ready. Using token from $%s. Send commands: '
+            'curl -s %s:%d '
+            '-H "%s: $%s" '
+            '-H "Content-Type: application/json" '
+            '-d \'{"cmd":"get_dom"}\' '
+            '(target: "browser":"firefox")',
+            env_var_name,
+            BIND_HOST,
+            http_port,
+            HTTP_AUTH_HEADER_NAME,
+            env_var_name,
+        )
+    else:
+        logger.info(
+            'Ready. Auto-generated token (set $%s to persist): '
+            'TOKEN=%s; curl -s %s:%d '
+            '-H "%s: $TOKEN" '
+            '-H "Content-Type: application/json" '
+            '-d \'{"cmd":"get_dom"}\' '
+            '(target: "browser":"firefox")',
+            env_var_name,
+            auth_token,
+            BIND_HOST,
+            http_port,
+            HTTP_AUTH_HEADER_NAME,
+        )
 
     ping_task = asyncio.create_task(kontrol.run_ping_loop())
 
@@ -1062,8 +1105,12 @@ def main() -> None:
 
     使用方法（サーブモード）:
         python3 server.py --serve [--port PORT] [--http-port PORT]
-        TOKEN=$(python3 server.py --serve 2>&1 | grep 'Auth token' | awk '{print $NF}')
-        curl -s localhost:9768 -H "X-FirefoxKontrol-Token: $TOKEN" \
+
+        # 環境変数未設定時: stderrに "TOKEN=xxx; curl ..." 形式でコピペ可能なコマンドが表示される
+        # 環境変数設定時: stderrにトークン値は表示されない（$FIREFOX_KONTROL_TOKEN をそのまま使用）
+        export FIREFOX_KONTROL_TOKEN=your_fixed_token_here  # 任意
+        python3 server.py --serve
+        curl -s localhost:9768 -H "X-FirefoxKontrol-Token: $FIREFOX_KONTROL_TOKEN" \
           -H "Content-Type: application/json" -d '{"cmd":"get_dom","browser":"firefox"}'
 
     環境変数:

@@ -66,23 +66,38 @@ python3 server.py --serve
 起動時にstderrへ認証トークンが表示されます。HTTP APIへのアクセスには`X-FirefoxKontrol-Token`ヘッダーと`Content-Type: application/json`が必須です（CSRF対策）:
 
 ```bash
-# トークンを固定したい場合（~/.bashrc等に追加）
+# トークンを固定する場合（~/.bashrc等に追加）
 export FIREFOX_KONTROL_TOKEN=your_fixed_token_here
 
 # サーバー起動
 python3 server.py --serve
+```
 
-# 別ターミナルでコマンド送信（TOKEN は起動時のstderr出力から取得）
-TOKEN=<起動時に表示されたトークン>
+**環境変数でトークンを固定している場合**（stderrにトークン値は表示されません）:
+
+```bash
+# 環境変数がそのままヘッダー値として使えます
 curl -s 127.0.0.1:9768 \
-  -H "X-FirefoxKontrol-Token: $TOKEN" \
+  -H "X-FirefoxKontrol-Token: $FIREFOX_KONTROL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"cmd":"get_dom"}'
 
 curl -s 127.0.0.1:9768 \
-  -H "X-FirefoxKontrol-Token: $TOKEN" \
+  -H "X-FirefoxKontrol-Token: $FIREFOX_KONTROL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"cmd":"get_elements","selector":"a","browser":"firefox"}'
+```
+
+**環境変数未設定の場合**（起動時にstderrへコピペ可能な形式で表示されます）:
+
+```bash
+# stderrに "TOKEN=xxx; curl ..." 形式で出力されるので、そのままコピペ可能
+# 例: TOKEN=abc123...; curl -s 127.0.0.1:9768 -H "X-FirefoxKontrol-Token: $TOKEN" ...
+TOKEN=<起動時のstderrから取得>
+curl -s 127.0.0.1:9768 \
+  -H "X-FirefoxKontrol-Token: $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"cmd":"get_dom"}'
 ```
 
 > **破壊的変更**: 認証ヘッダーなし、またはContent-Typeが`application/json`以外のリクエストはそれぞれ`401 Unauthorized` / `415 Unsupported Media Type`を返します。既存のcurlスクリプトへのヘッダー追加が必要です。

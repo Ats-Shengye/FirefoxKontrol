@@ -139,6 +139,24 @@ curl -s 127.0.0.1:9768 -d '{"cmd":"get_dom"}'
 - 並行リクエストは `asyncio.Lock` で直列化
 - レスポンスヘッダーに `Cache-Control: no-store` および `X-Content-Type-Options: nosniff`
 
+## 脅威モデル
+
+### 保護対象（in-scope）
+- 他オリジンのWebサイトからの CSRF 攻撃（訪問者の意図しない操作）
+- 外部ネットワークからの直接接続（localhost限定バインドで防止）
+- 悪意のあるcontent scriptによる拡張機能経由のDOM操作（executeScript関数引数渡しで分離）
+- メモリ枯渇DoS（メッセージサイズ上限、ヘッダー上限、タイムアウト）
+- ログインジェクション、タイミング攻撃
+- 同じbrowser_nameを用いた偽identifyによる正規接続の奪取（後着拒否で防止）
+
+### 保護対象外（out-of-scope）
+- **同一マシン上の他プロセスからの攻撃**: localhost HTTPサーバーに `lsof -i` 等で到達可能な悪意プロセスが存在する環境は想定外。シングルユーザー開発マシン前提
+- **Firefox本体の脆弱性**: ブラウザ本体がRCE等で侵害された場合の防御は本ツールのスコープ外
+- **ユーザーが誤って弱いトークンを設定する運用ミス**: 32文字未満警告は出すが拒否はしない
+- **拡張機能自体の改ざん検知**: manifest署名等による改ざん検出は未実装（Firefox Add-ons（AMO）経由の配布で担保）
+
+---
+
 ## Firefox MV3 Event Page のキープアライブ
 
 Firefox の MV3 background は非永続な event page で動作します。Service Worker（Chromium）と異なりWebSocketオブジェクトを保持できるが、アイドル時にunloadされます。

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FirefoxKontrol",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WebSocket経由でDOMアクセスと要素操作を行う軽量Firefox拡張機能（ChromeKontrolのFirefox移植版）。",
 
   "permissions": [
