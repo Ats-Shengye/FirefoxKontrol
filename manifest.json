@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "FirefoxKontrol",
+  "version": "0.1.0",
+  "description": "WebSocket経由でDOMアクセスと要素操作を行う軽量Firefox拡張機能（ChromeKontrolのFirefox移植版）。",
+
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "scripting",
+    "storage"
+  ],
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:9767"
+  },
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{3697498b-431f-405a-8653-dad95d3b2107}",
+      "strict_min_version": "121.0"
+    }
+  }
+}
